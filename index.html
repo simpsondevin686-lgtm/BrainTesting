@@ -5,83 +5,171 @@
     <style>
         body { margin: 0; overflow: hidden; background: #87CEEB; font-family: monospace; }
         canvas { display: block; position: absolute; top: 0; left: 0; z-index: 0; }
-        #ui { position: absolute; top: 10px; left: 10px; color: #fff; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; z-index: 100; pointer-events: none; }
+        #ui { position: absolute; top: 10px; left: 10px; color: #fff; background: rgba(0,0,0,0.8); padding: 10px; border-radius: 5px; z-index: 100; pointer-events: none; }
+        .oxytocin { color: #FF69B4; font-weight: bold; }
+        .dopamine { color: #00FFFF; font-weight: bold; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
     <div id="ui">
-        <div>Neurons: 10,500 (JS Engine)</div>
-        <div>Urge: Climb High</div>
+        <div>Neurons: 10,500 (Modular CPG)</div>
+        <div id="drive_text">Drive: 0.0</div>
+        <div id="oxytocin_text" class="oxytocin">Oxytocin: 0.0</div>
+        <div id="dopamine_text" class="dopamine">Dopamine: 0.0</div>
         <div id="status">Status: Waking up...</div>
     </div>
     <script>
         // ==========================================
-        // 1. THE 10,500-NEURON JS BRAIN (Clamped)
+        // 1. MODULAR 10,500-NEURON BRAIN (CSR)
         // ==========================================
-        class MegaBrain {
+        class ModularBrain {
             constructor() {
                 this.numNeurons = 10500;
-                this.numInputs = 130;
-                this.numOutputs = 10;
-                this.V = new Float32Array(this.numNeurons);
-                this.connections = [];
-                const totalConnections = Math.floor(this.numNeurons * this.numNeurons * 0.01);
                 
-                for (let i = 0; i < totalConnections; i++) {
-                    this.connections.push({
-                        from: Math.floor(Math.random() * this.numNeurons),
-                        to: Math.floor(Math.random() * this.numNeurons),
-                        weight: (Math.random() * 2 - 1) * 0.1
-                    });
-                }
-                this.learningRate = 0.05;
+                // --- REGION DEFINITIONS ---
+                this.regions = {
+                    sensory: { start: 0, end: 140 },       // 140 neurons (Vision, Touch, Pain)
+                    drive:   { start: 140, end: 150 },     // 10 neurons (Persistent internal state)
+                    assoc_E: { start: 150, end: 7875 },    // 7725 Excitatory interneurons
+                    assoc_I: { start: 7875, end: 10450 },  // 2575 Inhibitory interneurons
+                    motor:   { start: 10450, end: 10500 }  // 50 neurons (5 pools of 10)
+                };
+
+                this.V = new Float32Array(this.numNeurons);
+                
+                // Homeostatic & Plasticity constants
+                this.learningRate = 0.001; // SLOWER learning to prevent instant saturation
+                this.decayRate = 0.999;    // Weight decay
+                
+                this.buildModularConnections();
             }
 
-            step(inputs, dopamine) {
-                for (let i = 0; i < this.numInputs; i++) {
-                    this.V[i] = inputs[i];
+            buildModularConnections() {
+                console.log("Building Modular E/I Brain...");
+                const numConnections = 1050000; 
+                this.W_data = new Float32Array(numConnections);
+                this.W_indices = new Int32Array(numConnections);
+                this.W_indptr = new Int32Array(this.numNeurons + 1);
+
+                let edgeIdx = 0;
+                const outDegree = 100;
+
+                for (let i = 0; i < this.numNeurons; i++) {
+                    this.W_indptr[i] = edgeIdx;
+                    
+                    let isInhibitory = (i >= this.regions.assoc_I.start && i < this.regions.assoc_I.end);
+                    let baseWeight = Math.random() * 0.5;
+                    let finalWeight = isInhibitory ? -baseWeight : baseWeight;
+
+                    for (let k = 0; k < outDegree; k++) {
+                        let target;
+                        
+                        // --- MODULAR WIRING RULES ---
+                        if (i < this.regions.drive.end) {
+                            // Sensory & Drive -> Send to Association
+                            target = this.regions.assoc_E.start + Math.floor(Math.random() * (this.regions.assoc_I.end - this.regions.assoc_E.start));
+                        } else if (i < this.regions.assoc_I.end) {
+                            // Association -> Send mostly to Association, some to Motor
+                            if (Math.random() < 0.9) {
+                                target = this.regions.assoc_E.start + Math.floor(Math.random() * (this.regions.assoc_I.end - this.regions.assoc_E.start));
+                            } else {
+                                target = this.regions.motor.start + Math.floor(Math.random() * (this.regions.motor.end - this.regions.motor.start));
+                            }
+                        } else {
+                            // Motor -> Send to Motor (CPG) and Drive (Feedback)
+                            if (Math.random() < 0.8) {
+                                target = this.regions.motor.start + Math.floor(Math.random() * (this.regions.motor.end - this.regions.motor.start));
+                            } else {
+                                target = this.regions.drive.start + Math.floor(Math.random() * (this.regions.drive.end - this.regions.drive.start));
+                            }
+                        }
+
+                        this.W_data[edgeIdx] = finalWeight;
+                        this.W_indices[edgeIdx] = target;
+                        edgeIdx++;
+                    }
+                }
+                this.W_indptr[this.numNeurons] = edgeIdx;
+            }
+
+            step(inputs, total_reward) {
+                // 1. Inject Sensory Inputs
+                for (let i = 0; i < this.regions.sensory.end; i++) {
+                    this.V[this.regions.sensory.start + i] = inputs[i];
                 }
 
+                // 2. Persistent Drive (Feedback loop + Baseline)
+                // The drive neuron naturally wants to fire. The motor cortex can inhibit it.
+                let urge = Math.max(0.5, 10.0 - inputs[120]); // Input 120 is height
+                this.V[this.regions.drive.start] = urge; 
+                this.V[this.regions.drive.start + 1] = 1.0; // Constant exploration drive
+
+                // 3. Dynamics & CSR Matrix Multiplication
                 let newV = new Float32Array(this.numNeurons);
                 for (let i = 0; i < this.numNeurons; i++) {
-                    newV[i] = this.V[i] * 0.95;
+                    newV[i] = this.V[i] * 0.90; 
                 }
 
-                for (let c of this.connections) {
-                    newV[c.to] += this.V[c.from] * c.weight;
-                }
-
-                // FIX: Clamp membrane potential to prevent explosions
                 for (let i = 0; i < this.numNeurons; i++) {
-                    this.V[i] = Math.max(0, Math.min(10.0, newV[i]));
-                }
-
-                // Dopamine-gated Hebbian learning
-                if (dopamine > 0.01) {
-                    for (let c of this.connections) {
-                        if (this.V[c.from] > 1.0 && this.V[c.to] > 1.0) {
-                            c.weight += this.learningRate * dopamine;
-                            // FIX: Clamp weights so they don't grow to infinity
-                            c.weight = Math.max(-5.0, Math.min(5.0, c.weight));
+                    let start = this.W_indptr[i];
+                    let end = this.W_indptr[i + 1];
+                    let sourceVal = this.V[i];
+                    
+                    if (sourceVal > 0.1) { 
+                        for (let j = start; j < end; j++) {
+                            let target = this.W_indices[j];
+                            newV[target] += sourceVal * this.W_data[j];
                         }
                     }
                 }
 
-                for (let c of this.connections) {
-                    c.weight *= 0.9999;
+                // 4. Activation
+                for (let i = 0; i < this.numNeurons; i++) {
+                    this.V[i] = Math.max(0, Math.min(10.0, newV[i]));
                 }
 
-                let out = [];
-                for (let i = this.numNeurons - this.numOutputs; i < this.numNeurons; i++) {
-                    // FIX: Output 0 if NaN
-                    out.push(isNaN(this.V[i]) ? 0 : this.V[i]);
+                // 5. Plasticity & Homeostasis
+                for (let i = 0; i < this.numNeurons; i++) {
+                    let isInhibitory = (i >= this.regions.assoc_I.start && i < this.regions.assoc_I.end);
+                    let start = this.W_indptr[i];
+                    let end = this.W_indptr[i + 1];
+                    
+                    let sourceVal = this.V[i];
+                    if (sourceVal > 1.0 && total_reward > 0.01) {
+                        for (let j = start; j < end; j++) {
+                            let target = this.W_indices[j];
+                            if (this.V[target] > 1.0) {
+                                let dw = this.learningRate * total_reward;
+                                dw = isInhibitory ? -Math.abs(dw) : Math.abs(dw);
+                                this.W_data[j] += dw;
+                                this.W_data[j] = Math.max(-5.0, Math.min(5.0, this.W_data[j]));
+                            }
+                        }
+                    }
+                    
+                    // Apply decay to all outgoing weights of this neuron
+                    for (let j = start; j < end; j++) {
+                        this.W_data[j] *= this.decayRate;
+                    }
                 }
+
+                // 6. Structured Motor Readout
+                // We average pools of 10 neurons to get smooth motor commands
+                let out = { moveX: 0, moveZ: 0, climb: 0, look: 0 };
+                for(let k=0; k<10; k++) {
+                    out.moveX += this.V[this.regions.motor.start + k];
+                    out.moveZ += this.V[this.regions.motor.start + 10 + k];
+                    out.climb += this.V[this.regions.motor.start + 20 + k];
+                    out.look  += this.V[this.regions.motor.start + 30 + k];
+                }
+                out.moveX /= 10; out.moveZ /= 10; out.climb /= 10; out.look /= 10;
+                
                 return out;
             }
         }
 
-        const brain = new MegaBrain();
+        const brain = new ModularBrain();
 
         // ==========================================
         // 2. THE 3D WORLD
@@ -106,9 +194,6 @@
         ground.rotation.x = -Math.PI / 2;
         ground.position.y = -0.1;
         scene.add(ground);
-
-        const grid = new THREE.GridHelper(200, 100, 0x000000, 0x222222);
-        scene.add(grid);
 
         const creatureGeo = new THREE.BoxGeometry(2, 2, 2);
         const creatureMat = new THREE.MeshLambertMaterial({ color: 0x00FF00 });
@@ -136,10 +221,10 @@
         }
 
         // ==========================================
-        // 3. PHYSICS & LOOP
+        // 3. PHYSICS & REWARD
         // ==========================================
         let c = { x: 0, y: 0, z: 0, angle: 0, climbing: false };
-        let zoomLevel = 1.0;
+        let lastDistToTree = 999.0;
 
         function simulate() {
             let nearestTree = null;
@@ -149,39 +234,57 @@
                 if (dist < minDist) { minDist = dist; nearestTree = t; }
             }
 
-            let inputs = new Float32Array(130);
+            let inputs = new Float32Array(140);
+            
+            // Vision Inputs (0-99)
             if (nearestTree) {
                 let dx = nearestTree.x - c.x;
                 let dz = nearestTree.z - c.z;
                 let angle = Math.atan2(dz, dx);
-                inputs[0] = 1.0 / (minDist + 1);
+                inputs[0] = 1.0 / (minDist + 1); 
                 inputs[1] = Math.sin(angle);
                 inputs[2] = Math.cos(angle);
             }
+            
+            // Touch & Proprioception (100-139)
             if (c.y < 0) inputs[100] = 1.0;
-            let drive = Math.max(0, 10 - c.y);
-            inputs[110] = drive;
             inputs[120] = c.y;
+            let touching_tree = minDist < 2.5;
+            inputs[130] = touching_tree ? 1.0 : 0.0;
 
+            // --- REWARD GENERATION ---
             let dopamine = c.y > 2.0 ? c.y * 0.1 : 0.0;
-            let motorOut = brain.step(inputs, dopamine);
+            let oxytocin = 0.0;
 
-            let moveX = Math.max(-1, Math.min(1, motorOut[0] * 0.5));
-            let moveZ = Math.max(-1, Math.min(1, motorOut[1] * 0.5));
-            let climbCmd = Math.max(0, Math.min(1, motorOut[2]));
-            let lookCmd = Math.max(-0.1, Math.min(0.1, motorOut[3] * 0.05));
+            if (minDist < lastDistToTree - 0.1) {
+                oxytocin += 1.5; // Approaching reward
+            }
+            if (touching_tree) {
+                oxytocin += 3.0; // Contact reward
+            }
+            lastDistToTree = minDist;
+
+            let total_reward = dopamine + oxytocin;
+
+            // --- BRAIN STEP ---
+            let motorOut = brain.step(inputs, total_reward);
+
+            // --- APPLY PHYSICS ---
+            let moveX = Math.max(-1, Math.min(1, motorOut.moveX * 1.5 - 0.5)); // Bias towards forward
+            let moveZ = Math.max(-1, Math.min(1, motorOut.moveZ * 1.5 - 0.5));
+            let climbCmd = Math.max(0, Math.min(1, motorOut.climb * 1.5));
+            let lookCmd = Math.max(-0.1, Math.min(0.1, motorOut.look * 0.5 - 0.05));
 
             c.angle += lookCmd;
             
-            // Tentative move
             let nextX = c.x + (moveX * Math.cos(c.angle) - moveZ * Math.sin(c.angle));
             let nextZ = c.z + (moveX * Math.sin(c.angle) + moveZ * Math.cos(c.angle));
 
-            // FIX: Hard Collision with Trees
+            // Collision
             let collided = false;
             for (let t of trees) {
                 let distToTree = Math.sqrt((t.x - nextX)**2 + (t.z - nextZ)**2);
-                if (distToTree < t.radius + 1.0) { // 1.0 is creature radius
+                if (distToTree < t.radius + 1.0) {
                     collided = true;
                     c.climbing = true;
                     break;
@@ -194,7 +297,6 @@
                 c.climbing = false;
             }
 
-            // Climbing logic
             if (c.climbing) {
                 c.y += climbCmd * 0.5;
                 if (nearestTree && c.y > nearestTree.height) {
@@ -205,21 +307,32 @@
                 if (c.y < 0) c.y = 0;
             }
 
-            // FIX: Sanity check to prevent Cyan Void
             if (isNaN(c.x) || isNaN(c.z) || isNaN(c.y)) {
-                console.warn("Brain exploded! Resetting position.");
                 c.x = 0; c.z = 0; c.y = 0;
             }
 
-            document.getElementById('status').innerText = `Status: Y=${c.y.toFixed(1)} | Drive: ${drive.toFixed(2)} | Climbing: ${c.climbing}`;
+            // --- UI UPDATES ---
+            document.getElementById('status').innerText = `Y: ${c.y.toFixed(1)} | Climbing: ${c.climbing}`;
+            document.getElementById('drive_text').innerText = `Drive: ${(10 - c.y).toFixed(1)}`;
+            document.getElementById('oxytocin_text').innerText = `Oxytocin: ${oxytocin.toFixed(1)}`;
+            document.getElementById('dopamine_text').innerText = `Dopamine: ${dopamine.toFixed(1)}`;
+            
+            // Visual feedback
+            if (oxytocin > 0) {
+                creature.material.color.setHex(0xFF69B4); // Pink
+            } else if (dopamine > 0) {
+                creature.material.color.setHex(0x00FFFF); // Cyan
+            } else {
+                creature.material.color.setHex(0x00FF00); // Green
+            }
         }
 
         function render() {
             creature.position.set(c.x, c.y + 1, c.z);
             creature.rotation.y = c.angle;
 
-            const camDistance = 25 / zoomLevel;
-            const camHeight = 15 / zoomLevel;
+            const camDistance = 25;
+            const camHeight = 15;
             
             camera.position.x = creature.position.x - Math.sin(c.angle) * camDistance;
             camera.position.z = creature.position.z - Math.cos(c.angle) * camDistance;
@@ -234,36 +347,6 @@
             render();
             requestAnimationFrame(loop);
         }
-
-        // Pinch to Zoom
-        let lastPinchDist = 0;
-        renderer.domElement.addEventListener('touchstart', (e) => {
-            if (e.touches.length === 2) {
-                let dx = e.touches[0].clientX - e.touches[1].clientX;
-                let dy = e.touches[0].clientY - e.touches[1].clientY;
-                lastPinchDist = Math.sqrt(dx*dx + dy*dy);
-            }
-        });
-        renderer.domElement.addEventListener('touchmove', (e) => {
-            if (e.touches.length === 2) {
-                e.preventDefault();
-                let dx = e.touches[0].clientX - e.touches[1].clientX;
-                let dy = e.touches[0].clientY - e.touches[1].clientY;
-                let dist = Math.sqrt(dx*dx + dy*dy);
-                if (lastPinchDist > 0) {
-                    zoomLevel *= (dist / lastPinchDist);
-                    zoomLevel = Math.max(0.3, Math.min(zoomLevel, 3.0));
-                }
-                lastPinchDist = dist;
-            }
-        }, { passive: false });
-        renderer.domElement.addEventListener('touchend', () => { lastPinchDist = 0; });
-
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
 
         loop();
     </script>
