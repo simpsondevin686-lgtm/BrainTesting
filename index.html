@@ -3,7 +3,7 @@
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <style>
-        body { margin: 0; overflow: hidden; font-family: monospace; }
+        body { margin: 0; overflow: hidden; background: #87CEEB; font-family: monospace; }
         #ui { position: absolute; top: 10px; left: 10px; color: #fff; background: rgba(0,0,0,0.6); padding: 10px; border-radius: 5px; z-index: 100; pointer-events: none; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -16,63 +16,54 @@
     </div>
     <script>
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87CEEB); // FIX: Sky Blue background
-        scene.fog = new THREE.Fog(0x87CEEB, 50, 200); // Add depth
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 50, 200);
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
-        // Lighting
-        const light = new THREE.DirectionalLight(0xffffff, 1);
+        const light = new THREE.DirectionalLight(0xffffff, 1.2);
         light.position.set(50, 100, 50);
         scene.add(light);
-        scene.add(new THREE.AmbientLight(0x666666));
+        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
-        // FIX: Solid Ground Plane
+        // Solid Ground Plane
         const groundGeo = new THREE.PlaneGeometry(500, 500);
-        const groundMat = new THREE.MeshLambertMaterial({ color: 0x556B2F }); // Dark olive green
+        const groundMat = new THREE.MeshLambertMaterial({ color: 0x556B2F });
         const ground = new THREE.Mesh(groundGeo, groundMat);
         ground.rotation.x = -Math.PI / 2;
         ground.position.y = -0.1;
         scene.add(ground);
 
-        // Grid on top of ground
+        // Grid
         const grid = new THREE.GridHelper(200, 100, 0x000000, 0x222222);
-        grid.position.y = 0;
         scene.add(grid);
 
-        // Creature (Green Box)
+        // Creature
         const creatureGeo = new THREE.BoxGeometry(2, 2, 2);
         const creatureMat = new THREE.MeshLambertMaterial({ color: 0x00FF00 });
         const creature = new THREE.Mesh(creatureGeo, creatureMat);
         scene.add(creature);
 
-        // Generate Trees
-        let trees = [];
+        // Trees
         function addTree(x, z, height) {
-            // Trunk
             const trunkGeo = new THREE.CylinderGeometry(1, 1, height, 8);
             const trunkMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
             const trunk = new THREE.Mesh(trunkGeo, trunkMat);
             trunk.position.set(x, height / 2, z);
             scene.add(trunk);
 
-            // Leaves
             const leavesGeo = new THREE.ConeGeometry(4, 8, 8);
             const leavesMat = new THREE.MeshLambertMaterial({ color: 0x228B22 });
             const leaves = new THREE.Mesh(leavesGeo, leavesMat);
             leaves.position.set(x, height + 2, z);
             scene.add(leaves);
-            trees.push({ x: x, z: z, height: height });
         }
 
-        // Place 30 trees
         for (let i = 0; i < 30; i++) {
-            let tx = (Math.random() - 0.5) * 150;
-            let tz = (Math.random() - 0.5) * 150;
-            addTree(tx, tz, Math.random() * 10 + 5);
+            addTree((Math.random() - 0.5) * 150, (Math.random() - 0.5) * 150, Math.random() * 10 + 5);
         }
 
         let state = { creature: {x:0, y:0, z:0, angle:0}, brain_drive: 10.0 };
@@ -82,16 +73,13 @@
                 const response = await fetch('/api/step', { method: 'POST', body: '{}' });
                 state = await response.json();
 
-                // Update Creature Position
                 creature.position.x = state.creature.x;
-                creature.position.y = state.creature.y + 1; // +1 because center of box
+                creature.position.y = state.creature.y + 1;
                 creature.position.z = state.creature.z;
                 creature.rotation.y = state.creature.angle;
 
-                // FIX: 3rd Person Camera Logic
                 const camDistance = 25;
                 const camHeight = 15;
-                
                 camera.position.x = creature.position.x - Math.sin(creature.rotation.y) * camDistance;
                 camera.position.z = creature.position.z - Math.cos(creature.rotation.y) * camDistance;
                 camera.position.y = creature.position.y + camHeight;
@@ -102,10 +90,13 @@
             } catch (e) {
                 console.error("Waiting for server...");
             }
+            
+            // THE MISSING LINE THAT FIXES EVERYTHING:
+            renderer.render(scene, camera);
+            
             requestAnimationFrame(update);
         }
 
-        // Handle resize
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
