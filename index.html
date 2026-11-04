@@ -6,34 +6,37 @@
         body { margin: 0; overflow: hidden; background: #87CEEB; font-family: monospace; }
         canvas { display: block; position: absolute; top: 0; left: 0; z-index: 0; }
         #ui { position: absolute; top: 10px; left: 10px; color: #fff; background: rgba(0,0,0,0.8); padding: 10px; border-radius: 5px; z-index: 100; pointer-events: none; }
-        .oxytocin { color: #FF69B4; font-weight: bold; }
-        .dopamine { color: #00FFFF; font-weight: bold; }
         .mating { color: #FFFF00; font-weight: bold; font-size: 20px; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 200; text-shadow: 2px 2px 4px #000; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
     <div id="ui">
-        <div>Neurons per brain: 15,000 (Modular)</div>
+        <div>Brains: 2 x 15,000 Neurons</div>
         <div id="status1">Male: Waking up...</div>
         <div id="status2">Female: Waking up...</div>
     </div>
     <div id="mating_text" class="mating" style="display:none;">MATING</div>
     <script>
         // ==========================================
-        // 1. EXPANDED MODULAR BRAIN (15,000 Neurons)
+        // 1. HIGH-PERFORMANCE MODULAR BRAIN
         // ==========================================
         class ModularBrain {
             constructor() {
                 this.numNeurons = 15000;
                 this.regions = {
-                    sensory: { start: 0, end: 150 },       // Vision, Touch, Pain, Mate Pheromones
-                    drive:   { start: 150, end: 160 },     // Drive
-                    assoc_E: { start: 160, end: 11260 },   // Excitatory
-                    assoc_I: { start: 11260, end: 14950 }, // Inhibitory
-                    motor:   { start: 14950, end: 15000 }  // Motor
+                    sensory: { start: 0, end: 150 },
+                    drive:   { start: 150, end: 160 },
+                    assoc_E: { start: 160, end: 11260 },
+                    assoc_I: { start: 11260, end: 14950 },
+                    motor:   { start: 14950, end: 15000 }
                 };
+                
+                // PRE-ALLOCATE ALL MEMORY (No new arrays in the loop)
                 this.V = new Float32Array(this.numNeurons);
+                this.newV = new Float32Array(this.numNeurons); 
+                this.inputs = new Float32Array(150);
+                
                 this.learningRate = 0.005; 
                 this.decayRate = 0.99; 
                 this.buildModularConnections();
@@ -73,55 +76,67 @@
                 this.W_indptr[this.numNeurons] = edgeIdx;
             }
 
-            step(inputs, total_reward) {
-                for (let i = 0; i < this.regions.sensory.end; i++) {
-                    this.V[this.regions.sensory.start + i] = inputs[i];
-                }
-
-                let urge = Math.max(0.5, 10.0 - inputs[120]);
+            step(total_reward) {
+                // 1. Inject Drive Inputs
+                let urge = Math.max(0.5, 10.0 - this.inputs[120]);
                 this.V[this.regions.drive.start] = urge; 
                 this.V[this.regions.drive.start + 1] = 1.0;
 
-                let newV = new Float32Array(this.numNeurons);
+                // 2. Reset newV using pre-allocated memory
                 for (let i = 0; i < this.numNeurons; i++) {
-                    newV[i] = this.V[i] * 0.90; 
+                    this.newV[i] = this.V[i] * 0.90; 
                 }
 
+                // 3. CSR Matrix Multiplication (Cached references for speed)
+                const W_data = this.W_data;
+                const W_indices = this.W_indices;
+                const W_indptr = this.W_indptr;
+                const V = this.V;
+                const newV = this.newV;
+
                 for (let i = 0; i < this.numNeurons; i++) {
-                    let start = this.W_indptr[i];
-                    let end = this.W_indptr[i + 1];
-                    let sourceVal = this.V[i];
+                    let start = W_indptr[i];
+                    let end = W_indptr[i + 1];
+                    let sourceVal = V[i];
                     if (sourceVal > 0.1) { 
                         for (let j = start; j < end; j++) {
-                            newV[this.W_indices[j]] += sourceVal * this.W_data[j];
+                            newV[W_indices[j]] += sourceVal * W_data[j];
                         }
                     }
                 }
 
+                // 4. Activation & State Update
                 for (let i = 0; i < this.numNeurons; i++) {
                     this.V[i] = Math.max(0, Math.min(10.0, newV[i]));
                 }
 
-                for (let i = 0; i < this.numNeurons; i++) {
-                    let isInhibitory = (i >= this.regions.assoc_I.start && i < this.regions.assoc_I.end);
-                    let start = this.W_indptr[i];
-                    let end = this.W_indptr[i + 1];
-                    
-                    let sourceVal = this.V[i];
-                    if (sourceVal > 1.0 && total_reward > 0.01) {
-                        for (let j = start; j < end; j++) {
-                            if (this.V[this.W_indices[j]] > 1.0) {
-                                let dw = this.learningRate * total_reward;
-                                dw = isInhibitory ? -Math.abs(dw) : Math.abs(dw);
-                                this.W_data[j] = Math.max(-5.0, Math.min(5.0, this.W_data[j] + dw));
+                // 5. Fast Weight Decay (Flat loop over 1.5M elements)
+                for (let j = 0; j < W_data.length; j++) {
+                    W_data[j] *= this.decayRate;
+                }
+
+                // 6. Plasticity (Only if rewarded)
+                if (total_reward > 0.01) {
+                    for (let i = 0; i < this.numNeurons; i++) {
+                        let sourceVal = V[i];
+                        if (sourceVal > 1.0) {
+                            let isInhibitory = (i >= this.regions.assoc_I.start && i < this.regions.assoc_I.end);
+                            let start = W_indptr[i];
+                            let end = W_indptr[i + 1];
+                            
+                            for (let j = start; j < end; j++) {
+                                let target = W_indices[j];
+                                if (V[target] > 1.0) {
+                                    let dw = this.learningRate * total_reward;
+                                    dw = isInhibitory ? -Math.abs(dw) : Math.abs(dw);
+                                    W_data[j] = Math.max(-5.0, Math.min(5.0, W_data[j] + dw));
+                                }
                             }
                         }
                     }
-                    for (let j = start; j < end; j++) {
-                        this.W_data[j] *= this.decayRate;
-                    }
                 }
 
+                // 7. Return pre-allocated output object
                 let out = { moveX: 0, moveZ: 0, climb: 0, look: 0 };
                 for(let k=0; k<10; k++) {
                     out.moveX += this.V[this.regions.motor.start + k];
@@ -207,15 +222,24 @@
             }
 
             update(mate) {
-                // Find nearest tree
                 let nearestTree = null;
+                let minDistSq = 999999;
                 let minDist = 999;
+                
                 for (let t of trees) {
-                    let dist = Math.sqrt((t.x - this.x)**2 + (t.z - this.z)**2);
-                    if (dist < minDist) { minDist = dist; nearestTree = t; }
+                    let dx = t.x - this.x;
+                    let dz = t.z - this.z;
+                    let distSq = dx*dx + dz*dz;
+                    if (distSq < minDistSq) { 
+                        minDistSq = distSq; 
+                        nearestTree = t; 
+                        minDist = Math.sqrt(distSq);
+                    }
                 }
 
-                let inputs = new Float32Array(150); // Expanded inputs
+                // Clear inputs fast
+                this.brain.inputs.fill(0);
+                let inputs = this.brain.inputs;
                 
                 // Vision (Tree)
                 if (nearestTree) {
@@ -232,20 +256,19 @@
                 // Vision (Mate)
                 let dxMate = mate.x - this.x;
                 let dzMate = mate.z - this.z;
-                let mateDist = Math.sqrt(dxMate*dxMate + dzMate*dzMate);
+                let mateDistSq = dxMate*dxMate + dzMate*dzMate;
+                let mateDist = Math.sqrt(mateDistSq);
                 let mateAngle = Math.atan2(dzMate, dxMate) - this.angle;
                 
-                inputs[10] = 1.0 / (mateDist + 1); // Proximity to mate
+                inputs[10] = 1.0 / (mateDist + 1); 
                 inputs[11] = Math.sin(mateAngle);
                 inputs[12] = Math.cos(mateAngle);
-                inputs[13] = mate.y; // Mate height
+                inputs[13] = mate.y;
 
-                // Proprioception
                 inputs[120] = this.y;
                 let touching_tree = minDist < 2.5;
                 inputs[130] = touching_tree ? 1.0 : 0.0;
 
-                // Reward Logic
                 let dopamine = this.y > 2.0 ? this.y * 0.1 : 0.0;
                 let oxytocin = 0.0;
 
@@ -254,13 +277,12 @@
                 this.lastDist = minDist;
 
                 let total_reward = dopamine + oxytocin;
+                let motorOut = this.brain.step(total_reward);
 
-                let motorOut = this.brain.step(inputs, total_reward);
-
-                // Physics
-                let targetVx = Math.tanh(motorOut.moveX - 0.8); 
-                let targetVz = Math.tanh(motorOut.moveZ - 0.8);
-                let targetVAngle = Math.tanh(motorOut.look - 1.0) * 0.015; 
+                // FAST MATH: Clamp instead of Tanh
+                let targetVx = Math.max(-1, Math.min(1, motorOut.moveX - 0.8)); 
+                let targetVz = Math.max(-1, Math.min(1, motorOut.moveZ - 0.8));
+                let targetVAngle = Math.max(-1, Math.min(1, motorOut.look - 1.0)) * 0.015; 
                 let climbCmd = Math.max(0, Math.min(1, motorOut.climb * 0.5));
 
                 this.vx = this.vx * 0.9 + targetVx * 0.1;
@@ -275,8 +297,9 @@
                 let collided = false;
                 let hitTree = null;
                 for (let t of trees) {
-                    let distToTree = Math.sqrt((t.x - nextX)**2 + (t.z - nextZ)**2);
-                    if (distToTree < t.radius + 1.0) {
+                    let dx = t.x - nextX;
+                    let dz = t.z - nextZ;
+                    if (dx*dx + dz*dz < (t.radius + 1.0)*(t.radius + 1.0)) {
                         collided = true;
                         hitTree = t;
                         break;
@@ -300,7 +323,6 @@
                     if (this.y < 0) this.y = 0;
                 }
 
-                // Color logic
                 if (oxytocin > 0) this.targetColor.copy(this.colorPink);
                 else if (dopamine > 0) this.targetColor.copy(this.colorCyan);
                 else this.targetColor.copy(this.colorBase);
@@ -321,23 +343,21 @@
 
         function triggerMating() {
             document.getElementById('mating_text').style.display = 'block';
+            document.getElementById('mating_text').innerText = "MATING...";
             
-            // Spawn 2 babies (1 boy, 1 girl)
             for(let i=0; i<2; i++) {
                 let isBoy = i === 0;
                 let baby = new Creature(isBoy);
-                baby.mesh.scale.set(0.5, 0.5, 0.5); // Make them small
+                baby.mesh.scale.set(0.5, 0.5, 0.5);
                 
-                // Cling to a random tree
                 let randomTree = trees[Math.floor(Math.random() * trees.length)];
                 baby.x = randomTree.x + 2;
                 baby.z = randomTree.z;
-                baby.y = randomTree.height; // Spawn at the top
+                baby.y = randomTree.height; 
                 baby.climbing = true;
                 babies.push(baby);
             }
 
-            // Reset parents to separate trees
             let t1 = trees[Math.floor(Math.random() * trees.length)];
             let t2 = trees[Math.floor(Math.random() * trees.length)];
             male.x = t1.x; male.z = t1.z; male.y = 0;
@@ -354,32 +374,28 @@
                 if (matingTimer === 0) {
                     triggerMating();
                 }
-                return; // Pause game logic during mating
+                return; 
             }
 
             male.update(female);
             female.update(male);
 
-            // Check Mating Condition
             let dx = male.x - female.x;
             let dz = male.z - female.z;
-            let dist = Math.sqrt(dx*dx + dz*dz);
+            let distSq = dx*dx + dz*dz;
 
-            // If both are high up and close to each other
-            if (male.y > 5.0 && female.y > 5.0 && dist < 4.0) {
-                // Massive reward to reinforce this behavior
-                male.brain.step(new Float32Array(150), 10.0); 
-                female.brain.step(new Float32Array(150), 10.0);
+            // If both are high up and close to each other (dist < 4.0 means distSq < 16.0)
+            if (male.y > 5.0 && female.y > 5.0 && distSq < 16.0) {
+                male.brain.step(10.0); 
+                female.brain.step(10.0);
                 
-                // Trigger mating sequence
-                matingTimer = 120; // 2 seconds at 60fps
+                matingTimer = 120; 
                 document.getElementById('mating_text').style.display = 'block';
                 document.getElementById('mating_text').innerText = "MATING...";
             }
 
-            // Update Babies
             babies.forEach(baby => {
-                baby.update(male); // They just follow the same logic
+                baby.update(male); 
             });
 
             document.getElementById('status1').innerText = `Male: Y=${male.y.toFixed(1)} | Climb=${male.climbing}`;
@@ -387,7 +403,6 @@
         }
 
         function render() {
-            // Camera follows male
             const camDistance = 35;
             const camHeight = 20;
             
