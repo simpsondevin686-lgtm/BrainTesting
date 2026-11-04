@@ -6,41 +6,47 @@ import scipy.sparse as sp
 import os
 
 class MegaBrain:
-    def __init__(self):
-        self.num_neurons = 10500
+    def __init__(self, filename="vibrane_brain.npz"):
+        if not os.path.exists(filename):
+            raise FileNotFoundError(f"Brain file {filename} not found. Run generate_brain.py first!")
+        
+        print("Loading brain from .npz vial...")
+        brain_data = np.load(filename)
+        
+        self.shape = tuple(brain_data['shape'])
+        self.V = brain_data['V']
+        self.W = sp.csr_matrix((brain_data['data'], (brain_data['rows'], brain_data['cols'])), shape=self.shape)
+        
+        self.num_neurons = self.shape[0]
         self.num_inputs = 130
         self.num_outputs = 10
-        self.num_hidden = self.num_neurons - self.num_inputs - self.num_outputs
-        
-        self.idx_input = np.arange(0, self.num_inputs)
-        self.idx_hidden = np.arange(self.num_inputs, self.num_inputs + self.num_hidden)
-        self.idx_output = np.arange(self.num_inputs + self.num_hidden, self.num_neurons)
-
-        print(f"Generating {self.num_neurons} neurons...")
-        density = 0.01
-        total_connections = int(self.num_neurons * self.num_neurons * density)
-        
-        rows = np.random.randint(0, self.num_neurons, total_connections)
-        cols = np.random.randint(0, self.num_neurons, total_connections)
-        data = np.random.randn(total_connections) * 0.1
-        
-        self.W = sp.csr_matrix((data, (rows, cols)), shape=(self.num_neurons, self.num_neurons))
-        self.V = np.zeros(self.num_neurons)
+        self.idx_output = np.arange(self.num_neurons - self.num_outputs, self.num_neurons)
         self.learning_rate = 0.01
+        print(f"✅ Brain loaded: {self.num_neurons} neurons, {len(brain_data['data'])} synapses.")
 
     def step(self, inputs, dopamine):
         self.V[:self.num_inputs] = inputs
         self.V = self.V * 0.95 + self.W.dot(self.V)
         self.V = np.maximum(0, self.V)
         
+        # Dopamine-gated Hebbian learning
         if dopamine > 0.01:
             active = np.where(self.V > 1.0)[0]
             if len(active) > 1:
                 for i in range(min(len(active), 50)):
                     for j in range(min(len(active), 50)):
                         self.W[active[i], active[j]] += self.learning_rate * dopamine
+                        
         self.W.data *= 0.9999
         return self.V[self.idx_output]
+    
+    def save(self, filename="vibrane_brain.npz"):
+        np.savez_compressed(filename, 
+                            data=self.W.data, 
+                            rows=self.W.tocoo().row, 
+                            cols=self.W.tocoo().col, 
+                            V=self.V, 
+                            shape=self.shape)
 
 brain = MegaBrain()
 world = {
@@ -49,6 +55,7 @@ world = {
     "drive": 1.0
 }
 
+# Generate Trees
 for _ in range(30):
     world["trees"].append({
         "x": np.random.uniform(-75, 75),
@@ -80,6 +87,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     min_dist = dist
                     nearest_tree = t
             
+            # Sensory Inputs
             vision_inputs = np.zeros(100)
             if nearest_tree:
                 dx = nearest_tree["x"] - c["x"]
@@ -92,6 +100,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pain_inputs = np.zeros(10)
             if c["y"] < 0: pain_inputs[0] = 1.0
             
+            # The "Urge" (Drive to climb)
             drive = max(0, 10 - c["y"]) 
             world["drive"] = drive
             drive_inputs = np.zeros(10)
@@ -101,6 +110,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             prop_inputs[0] = c["y"]
             
             total_inputs = np.concatenate([vision_inputs, pain_inputs, drive_inputs, prop_inputs])
+            
+            # Dopamine Reward (High up = good)
             dopamine = c["y"] * 0.1 if c["y"] > 2.0 else 0.0
             
             motor_out = brain.step(total_inputs, dopamine)
@@ -125,6 +136,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not c["climbing"]:
                 c["y"] -= 0.2
                 if c["y"] < 0: c["y"] = 0
+            
+            # Save brain state periodically
+            if np.random.rand() < 0.01:
+                brain.save()
             
             res = json.dumps({"creature": c, "brain_drive": world["drive"]})
             self.send_response(200)
