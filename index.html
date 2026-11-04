@@ -25,13 +25,13 @@
         <button onclick="saveKey()">Save</button>
     </div>
     <script>
-        let GROQ_KEY = localStorage.getItem("groq_key") || "";
+        let GROQ_KEY = "";
         function saveKey() {
             GROQ_KEY = document.getElementById("apiKey").value;
-            localStorage.setItem("groq_key", GROQ_KEY);
+            
             document.getElementById("api-box").style.display = "none";
         }
-        if (GROQ_KEY) document.getElementById("api-box").style.display = "none";
+        
 
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x87CEEB);
