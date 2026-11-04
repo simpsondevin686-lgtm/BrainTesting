@@ -20,33 +20,23 @@
         <div id="status">Status: Waking up...</div>
     </div>
     <script>
-        // ==========================================
-        // 1. MODULAR 10,500-NEURON BRAIN (CSR)
-        // ==========================================
         class ModularBrain {
             constructor() {
                 this.numNeurons = 10500;
-                
-                // --- REGION DEFINITIONS ---
                 this.regions = {
-                    sensory: { start: 0, end: 140 },       // 140 neurons (Vision, Touch, Pain)
-                    drive:   { start: 140, end: 150 },     // 10 neurons (Persistent internal state)
-                    assoc_E: { start: 150, end: 7875 },    // 7725 Excitatory interneurons
-                    assoc_I: { start: 7875, end: 10450 },  // 2575 Inhibitory interneurons
-                    motor:   { start: 10450, end: 10500 }  // 50 neurons (5 pools of 10)
+                    sensory: { start: 0, end: 140 },
+                    drive:   { start: 140, end: 150 },
+                    assoc_E: { start: 150, end: 7875 },
+                    assoc_I: { start: 7875, end: 10450 },
+                    motor:   { start: 10450, end: 10500 }
                 };
-
                 this.V = new Float32Array(this.numNeurons);
-                
-                // Homeostatic & Plasticity constants
-                this.learningRate = 0.001; // SLOWER learning to prevent instant saturation
-                this.decayRate = 0.999;    // Weight decay
-                
+                this.learningRate = 0.001;
+                this.decayRate = 0.999;
                 this.buildModularConnections();
             }
 
             buildModularConnections() {
-                console.log("Building Modular E/I Brain...");
                 const numConnections = 1050000; 
                 this.W_data = new Float32Array(numConnections);
                 this.W_indices = new Int32Array(numConnections);
@@ -57,34 +47,21 @@
 
                 for (let i = 0; i < this.numNeurons; i++) {
                     this.W_indptr[i] = edgeIdx;
-                    
                     let isInhibitory = (i >= this.regions.assoc_I.start && i < this.regions.assoc_I.end);
                     let baseWeight = Math.random() * 0.5;
                     let finalWeight = isInhibitory ? -baseWeight : baseWeight;
 
                     for (let k = 0; k < outDegree; k++) {
                         let target;
-                        
-                        // --- MODULAR WIRING RULES ---
                         if (i < this.regions.drive.end) {
-                            // Sensory & Drive -> Send to Association
                             target = this.regions.assoc_E.start + Math.floor(Math.random() * (this.regions.assoc_I.end - this.regions.assoc_E.start));
                         } else if (i < this.regions.assoc_I.end) {
-                            // Association -> Send mostly to Association, some to Motor
-                            if (Math.random() < 0.9) {
-                                target = this.regions.assoc_E.start + Math.floor(Math.random() * (this.regions.assoc_I.end - this.regions.assoc_E.start));
-                            } else {
-                                target = this.regions.motor.start + Math.floor(Math.random() * (this.regions.motor.end - this.regions.motor.start));
-                            }
+                            if (Math.random() < 0.9) target = this.regions.assoc_E.start + Math.floor(Math.random() * (this.regions.assoc_I.end - this.regions.assoc_E.start));
+                            else target = this.regions.motor.start + Math.floor(Math.random() * (this.regions.motor.end - this.regions.motor.start));
                         } else {
-                            // Motor -> Send to Motor (CPG) and Drive (Feedback)
-                            if (Math.random() < 0.8) {
-                                target = this.regions.motor.start + Math.floor(Math.random() * (this.regions.motor.end - this.regions.motor.start));
-                            } else {
-                                target = this.regions.drive.start + Math.floor(Math.random() * (this.regions.drive.end - this.regions.drive.start));
-                            }
+                            if (Math.random() < 0.8) target = this.regions.motor.start + Math.floor(Math.random() * (this.regions.motor.end - this.regions.motor.start));
+                            else target = this.regions.drive.start + Math.floor(Math.random() * (this.regions.drive.end - this.regions.drive.start));
                         }
-
                         this.W_data[edgeIdx] = finalWeight;
                         this.W_indices[edgeIdx] = target;
                         edgeIdx++;
@@ -94,18 +71,14 @@
             }
 
             step(inputs, total_reward) {
-                // 1. Inject Sensory Inputs
                 for (let i = 0; i < this.regions.sensory.end; i++) {
                     this.V[this.regions.sensory.start + i] = inputs[i];
                 }
 
-                // 2. Persistent Drive (Feedback loop + Baseline)
-                // The drive neuron naturally wants to fire. The motor cortex can inhibit it.
-                let urge = Math.max(0.5, 10.0 - inputs[120]); // Input 120 is height
+                let urge = Math.max(0.5, 10.0 - inputs[120]);
                 this.V[this.regions.drive.start] = urge; 
-                this.V[this.regions.drive.start + 1] = 1.0; // Constant exploration drive
+                this.V[this.regions.drive.start + 1] = 1.0;
 
-                // 3. Dynamics & CSR Matrix Multiplication
                 let newV = new Float32Array(this.numNeurons);
                 for (let i = 0; i < this.numNeurons; i++) {
                     newV[i] = this.V[i] * 0.90; 
@@ -115,21 +88,17 @@
                     let start = this.W_indptr[i];
                     let end = this.W_indptr[i + 1];
                     let sourceVal = this.V[i];
-                    
                     if (sourceVal > 0.1) { 
                         for (let j = start; j < end; j++) {
-                            let target = this.W_indices[j];
-                            newV[target] += sourceVal * this.W_data[j];
+                            newV[this.W_indices[j]] += sourceVal * this.W_data[j];
                         }
                     }
                 }
 
-                // 4. Activation
                 for (let i = 0; i < this.numNeurons; i++) {
                     this.V[i] = Math.max(0, Math.min(10.0, newV[i]));
                 }
 
-                // 5. Plasticity & Homeostasis
                 for (let i = 0; i < this.numNeurons; i++) {
                     let isInhibitory = (i >= this.regions.assoc_I.start && i < this.regions.assoc_I.end);
                     let start = this.W_indptr[i];
@@ -138,24 +107,18 @@
                     let sourceVal = this.V[i];
                     if (sourceVal > 1.0 && total_reward > 0.01) {
                         for (let j = start; j < end; j++) {
-                            let target = this.W_indices[j];
-                            if (this.V[target] > 1.0) {
+                            if (this.V[this.W_indices[j]] > 1.0) {
                                 let dw = this.learningRate * total_reward;
                                 dw = isInhibitory ? -Math.abs(dw) : Math.abs(dw);
-                                this.W_data[j] += dw;
-                                this.W_data[j] = Math.max(-5.0, Math.min(5.0, this.W_data[j]));
+                                this.W_data[j] = Math.max(-5.0, Math.min(5.0, this.W_data[j] + dw));
                             }
                         }
                     }
-                    
-                    // Apply decay to all outgoing weights of this neuron
                     for (let j = start; j < end; j++) {
                         this.W_data[j] *= this.decayRate;
                     }
                 }
 
-                // 6. Structured Motor Readout
-                // We average pools of 10 neurons to get smooth motor commands
                 let out = { moveX: 0, moveZ: 0, climb: 0, look: 0 };
                 for(let k=0; k<10; k++) {
                     out.moveX += this.V[this.regions.motor.start + k];
@@ -164,7 +127,6 @@
                     out.look  += this.V[this.regions.motor.start + 30 + k];
                 }
                 out.moveX /= 10; out.moveZ /= 10; out.climb /= 10; out.look /= 10;
-                
                 return out;
             }
         }
@@ -196,9 +158,16 @@
         scene.add(ground);
 
         const creatureGeo = new THREE.BoxGeometry(2, 2, 2);
+        // Use a base material that we can smoothly lerp colors on
         const creatureMat = new THREE.MeshLambertMaterial({ color: 0x00FF00 });
         const creature = new THREE.Mesh(creatureGeo, creatureMat);
         scene.add(creature);
+
+        // Color targets for smooth transitions
+        const colorGreen = new THREE.Color(0x00FF00);
+        const colorPink = new THREE.Color(0xFF69B4);
+        const colorCyan = new THREE.Color(0x00FFFF);
+        const targetColor = new THREE.Color(0x00FF00);
 
         let trees = [];
         function addTree(x, z, height) {
@@ -221,9 +190,9 @@
         }
 
         // ==========================================
-        // 3. PHYSICS & REWARD
+        // 3. PHYSICS & REWARD LOOP
         // ==========================================
-        let c = { x: 0, y: 0, z: 0, angle: 0, climbing: false };
+        let c = { x: 0, y: 0, z: 0, angle: 0, climbing: false, vx: 0, vz: 0, vAngle: 0 };
         let lastDistToTree = 999.0;
 
         function simulate() {
@@ -236,49 +205,51 @@
 
             let inputs = new Float32Array(140);
             
-            // Vision Inputs (0-99)
+            // FIX: Vision Inputs are now RELATIVE to the creature's angle
             if (nearestTree) {
                 let dx = nearestTree.x - c.x;
                 let dz = nearestTree.z - c.z;
-                let angle = Math.atan2(dz, dx);
-                inputs[0] = 1.0 / (minDist + 1); 
-                inputs[1] = Math.sin(angle);
-                inputs[2] = Math.cos(angle);
+                let absoluteAngle = Math.atan2(dz, dx);
+                let relativeAngle = absoluteAngle - c.angle; 
+                
+                inputs[0] = 1.0 / (minDist + 1); // Distance
+                inputs[1] = Math.sin(relativeAngle); // Left/Right relative
+                inputs[2] = Math.cos(relativeAngle); // Front/Back relative
             }
             
-            // Touch & Proprioception (100-139)
             if (c.y < 0) inputs[100] = 1.0;
             inputs[120] = c.y;
             let touching_tree = minDist < 2.5;
             inputs[130] = touching_tree ? 1.0 : 0.0;
 
-            // --- REWARD GENERATION ---
+            // Reward Logic
             let dopamine = c.y > 2.0 ? c.y * 0.1 : 0.0;
             let oxytocin = 0.0;
 
-            if (minDist < lastDistToTree - 0.1) {
-                oxytocin += 1.5; // Approaching reward
-            }
-            if (touching_tree) {
-                oxytocin += 3.0; // Contact reward
-            }
+            if (minDist < lastDistToTree - 0.1) oxytocin += 1.5;
+            if (touching_tree) oxytocin += 3.0;
             lastDistToTree = minDist;
 
             let total_reward = dopamine + oxytocin;
 
-            // --- BRAIN STEP ---
             let motorOut = brain.step(inputs, total_reward);
 
-            // --- APPLY PHYSICS ---
-            let moveX = Math.max(-1, Math.min(1, motorOut.moveX * 1.5 - 0.5)); // Bias towards forward
-            let moveZ = Math.max(-1, Math.min(1, motorOut.moveZ * 1.5 - 0.5));
-            let climbCmd = Math.max(0, Math.min(1, motorOut.climb * 1.5));
-            let lookCmd = Math.max(-0.1, Math.min(0.1, motorOut.look * 0.5 - 0.05));
+            // FIX: Smooth Motor Physics (Momentum)
+            // Use tanh to smoothly squash the brain signals between -1 and 1
+            let targetVx = Math.tanh(motorOut.moveX - 1.0); 
+            let targetVz = Math.tanh(motorOut.moveZ - 1.0);
+            let targetVAngle = Math.tanh(motorOut.look - 1.0) * 0.05; 
+            let climbCmd = Math.max(0, Math.min(1, motorOut.climb * 0.5));
 
-            c.angle += lookCmd;
+            // Apply momentum (smoothing) so it doesn't snap and spin
+            c.vx = c.vx * 0.85 + targetVx * 0.15;
+            c.vz = c.vz * 0.85 + targetVz * 0.15;
+            c.vAngle = c.vAngle * 0.85 + targetVAngle * 0.15;
+
+            c.angle += c.vAngle;
             
-            let nextX = c.x + (moveX * Math.cos(c.angle) - moveZ * Math.sin(c.angle));
-            let nextZ = c.z + (moveX * Math.sin(c.angle) + moveZ * Math.cos(c.angle));
+            let nextX = c.x + (c.vx * Math.cos(c.angle) - c.vz * Math.sin(c.angle));
+            let nextZ = c.z + (c.vx * Math.sin(c.angle) + c.vz * Math.cos(c.angle));
 
             // Collision
             let collided = false;
@@ -299,32 +270,27 @@
 
             if (c.climbing) {
                 c.y += climbCmd * 0.5;
-                if (nearestTree && c.y > nearestTree.height) {
-                    c.y = nearestTree.height;
-                }
+                if (nearestTree && c.y > nearestTree.height) c.y = nearestTree.height;
             } else {
                 c.y -= 0.2;
                 if (c.y < 0) c.y = 0;
             }
 
             if (isNaN(c.x) || isNaN(c.z) || isNaN(c.y)) {
-                c.x = 0; c.z = 0; c.y = 0;
+                c.x = 0; c.z = 0; c.y = 0; c.vx = 0; c.vz = 0;
             }
 
-            // --- UI UPDATES ---
+            // FIX: Smooth Color Transitions
+            if (oxytocin > 0) targetColor.copy(colorPink);
+            else if (dopamine > 0) targetColor.copy(colorCyan);
+            else targetColor.copy(colorGreen);
+            
+            creature.material.color.lerp(targetColor, 0.1);
+
             document.getElementById('status').innerText = `Y: ${c.y.toFixed(1)} | Climbing: ${c.climbing}`;
             document.getElementById('drive_text').innerText = `Drive: ${(10 - c.y).toFixed(1)}`;
             document.getElementById('oxytocin_text').innerText = `Oxytocin: ${oxytocin.toFixed(1)}`;
             document.getElementById('dopamine_text').innerText = `Dopamine: ${dopamine.toFixed(1)}`;
-            
-            // Visual feedback
-            if (oxytocin > 0) {
-                creature.material.color.setHex(0xFF69B4); // Pink
-            } else if (dopamine > 0) {
-                creature.material.color.setHex(0x00FFFF); // Cyan
-            } else {
-                creature.material.color.setHex(0x00FF00); // Green
-            }
         }
 
         function render() {
