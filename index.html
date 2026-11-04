@@ -47,33 +47,34 @@
             const leaves = new THREE.Mesh(leavesGeo, leavesMat);
             leaves.position.set(x, height + 2, z);
             scene.add(leaves);
-            
-            trees.push({ x: x, z: z, height: height, radius: 1 });
+            trees.push({ x: x, z: z, height: height });
         }
 
         for (let i = 0; i < 30; i++) {
-            let tx = (Math.random() - 0.5) * 150;
-            let tz = (Math.random() - 0.5) * 150;
-            let th = Math.random() * 10 + 5;
-            addTree(tx, tz, th);
+            addTree((Math.random() - 0.5) * 150, (Math.random() - 0.5) * 150, Math.random() * 10 + 5);
         }
 
-        camera.position.set(0, 10, 20);
         let state = { creature: {x:0, y:0, z:0, angle:0}, brain_drive: 0 };
 
         async function update() {
             const response = await fetch('/api/step', { method: 'POST', body: '{}' });
-            const data = await response.json();
-            state = data;
+            state = await response.json();
 
+            // Update Creature Position
             creature.position.x = state.creature.x;
             creature.position.y = state.creature.y + 1;
             creature.position.z = state.creature.z;
             creature.rotation.y = state.creature.angle;
 
-            camera.position.x = creature.position.x;
-            camera.position.z = creature.position.z + 25;
-            camera.position.y = creature.position.y + 15;
+            // 3rd Person Camera (Attached behind and above)
+            const camDistance = 20;
+            const camHeight = 10;
+            
+            // Calculate offset based on creature's facing angle
+            camera.position.x = creature.position.x - Math.sin(creature.rotation.y) * camDistance;
+            camera.position.z = creature.position.z - Math.cos(creature.rotation.y) * camDistance;
+            camera.position.y = creature.position.y + camHeight;
+            
             camera.lookAt(creature.position);
 
             document.getElementById('status').innerText = `Status: Y=${state.creature.y.toFixed(1)} | Drive: ${state.brain_drive.toFixed(2)}`;
