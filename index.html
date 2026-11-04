@@ -1,86 +1,133 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <style>
-        body { margin: 0; overflow: hidden; background: #87CEEB; font-family: monospace; }
-        #ui { position: absolute; top: 10px; left: 10px; color: #000; background: rgba(255,255,255,0.8); padding: 10px; border-radius: 5px; z-index: 100; }
-    </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<style>
+body{margin:0;overflow:hidden;background:#87CEEB;font-family:monospace}
+canvas{display:block;position:absolute;top:0;left:0;z-index:0}
+#ui{position:absolute;top:10px;left:10px;color:#fff;background:rgba(0,0,0,.8);padding:10px;border-radius:5px;z-index:100;pointer-events:none}
+.m{color:#FF0;font-weight:700;font-size:20px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:200;text-shadow:2px 2px 4px #000}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
-    <div id="ui">
-        <div>Neurons: 10,500</div>
-        <div>Urge: Climb High</div>
-        <div id="status">Status: Waking up...</div>
-    </div>
-    <script>
-        const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        document.body.appendChild(renderer.domElement);
+<div id="ui"><div>Brains: 2 x 15,000</div><div id="s1">Male...</div><div id="s2">Female...</div></div>
+<div id="mt" class="m" style="display:none">MATING</div>
+<script>
+class B{
+constructor(){
+this.n=15000;this.V=new Float32Array(this.n);this.nV=new Float32Array(this.n);this.in=new Float32Array(150);this.lr=.005;this.decayT=0;this.build();}
+build(){
+const c=1500000;this.wd=new Float32Array(c);this.wi=new Int32Array(c);this.wp=new Int32Array(this.n+1);let e=0;
+for(let i=0;i<this.n;i++){
+this.wp[i]=e;let isI=(i>=11260&&i<14950);let base=Math.random()*.5;let fw=isI?-base:base;
+for(let k=0;k<100;k++){
+let t;
+if(i<160)t=160+Math.floor(Math.random()*11100);
+else if(i<14950){t=Math.random()<.9?160+Math.floor(Math.random()*11100):14950+Math.floor(Math.random()*50);}
+else{t=Math.random()<.8?14950+Math.floor(Math.random()*50):150+Math.floor(Math.random()*10);}
+this.wd[e]=fw;this.wi[e]=t;e++;}}
+this.wp[this.n]=e;}
+step(rew){
+let urge=Math.max(.5,10-this.in[120]);this.V[150]=urge;this.V[151]=1;
+for(let i=0;i<this.n;i++)this.nV[i]=this.V[i]*.9;
+for(let i=0;i<this.n;i++){
+let s=this.wp[i],e=this.wp[i+1],sv=this.V[i];
+if(sv>.1)for(let j=s;j<e;j++)this.nV[this.wi[j]]+=sv*this.wd[j];}
+for(let i=0;i<this.n;i++)this.V[i]=Math.max(0,Math.min(10,this.nV[i]));
+this.decayT++;if(this.decayT>=10){for(let j=0;j<this.wd.length;j++)this.wd[j]*=.9;this.decayT=0;}
+if(rew>.01){
+for(let i=0;i<this.n;i++){
+let sv=this.V[i];
+if(sv>1){
+let isI=(i>=11260&&i<14950);let s=this.wp[i],e=this.wp[i+1];
+for(let j=s;j<e;j++){if(this.V[this.wi[j]]>1){
+let dw=this.lr*rew;dw=isI?-Math.abs(dw):Math.abs(dw);this.wd[j]=Math.max(-5,Math.min(5,this.wd[j]+dw));}}}}
+}
+let o={x:0,z:0,c:0,l:0};for(let k=0;k<10;k++){o.x+=this.V[14950+k];o.z+=this.V[14960+k];o.c+=this.V[14970+k];o.l+=this.V[14980+k];}o.x/=10;o.z/=10;o.c/=10;o.l/=10;return o;}}
 
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(10, 20, 10);
-        scene.add(light);
-        scene.add(new THREE.AmbientLight(0x404040));
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x87CEEB);scene.fog=new THREE.Fog(0x87CEEB,50,200);
+const cam=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,.1,1000);
+const ren=new THREE.WebGLRenderer({antialias:true});ren.setSize(innerWidth,innerHeight);document.body.appendChild(ren.domElement);
+const light=new THREE.DirectionalLight(0xffffff,1.2);light.position.set(50,100,50);scene.add(light);scene.add(new THREE.AmbientLight(0xffffff,.5));
+const gGeo=new THREE.PlaneGeometry(500,500),gMat=new THREE.MeshLambertMaterial({color:0x556B2F}),g=new THREE.Mesh(gGeo,gMat);g.rotation.x=-Math.PI/2;g.position.y=-.1;scene.add(g);
 
-        const grid = new THREE.GridHelper(200, 100, 0x000000, 0x444444);
-        scene.add(grid);
+let trees=[];
+function addT(x,z,h){
+const tG=new THREE.CylinderGeometry(1,1,h,8),tM=new THREE.MeshLambertMaterial({color:0x8B4513}),t=new THREE.Mesh(tG,tM);t.position.set(x,h/2,z);scene.add(t);
+const lG=new THREE.ConeGeometry(4,8,8),lM=new THREE.MeshLambertMaterial({color:0x228B22}),l=new THREE.Mesh(lG,lM);l.position.set(x,h+2,z);scene.add(l);
+trees.push({x,z,h,r:1.5});}
+for(let i=0;i<30;i++)addT((Math.random()-.5)*150,(Math.random()-.5)*150,Math.random()*10+5);
 
-        const creatureGeo = new THREE.BoxGeometry(2, 2, 2);
-        const creatureMat = new THREE.MeshLambertMaterial({ color: 0x00FF00 });
-        const creature = new THREE.Mesh(creatureGeo, creatureMat);
-        scene.add(creature);
+class C{
+constructor(isM){
+this.isM=isM;this.brain=new B();this.x=(Math.random()-.5)*100;this.z=(Math.random()-.5)*100;this.y=0;this.angle=0;this.vx=0;this.vA=0;this.climbing=false;this.lastDist=999;this.lastMateDist=999;
+const geo=new THREE.BoxGeometry(isM?2:1.8,isM?2:1.8,isM?2:1.8),mat=new THREE.MeshLambertMaterial({color:isM?0x00FF00:0xFF00FF});
+this.mesh=new THREE.Mesh(geo,mat);scene.add(this.mesh);
+this.cB=new THREE.Color(isM?0x00FF00:0xFF00FF);this.cP=new THREE.Color(0xFF69B4);this.cC=new THREE.Color(0x00FFFF);this.tC=new THREE.Color().copy(this.cB);}
+update(mate){
+let nT=null,mD=999,mDSq=999999;
+for(let t of trees){let dx=t.x-this.x,dz=t.z-this.z,dSq=dx*dx+dz*dz;if(dSq<mDSq){mDSq=dSq;nT=t;mD=Math.sqrt(dSq);}}
+this.brain.in.fill(0);let inp=this.brain.in;
+if(nT){let dx=nT.x-this.x,dz=nT.z-this.z,a=Math.atan2(dz,dx)-this.angle;inp[0]=1/(mD+1);inp[1]=Math.sin(a);inp[2]=Math.cos(a);}
+let dxM=mate.x-this.x,dzM=mate.z-this.z,mDist=Math.sqrt(dxM*dxM+dzM*dzM),aM=Math.atan2(dzM,dxM)-this.angle;
+inp[10]=1/(mDist+1);inp[11]=Math.sin(aM);inp[12]=Math.cos(aM);inp[13]=mate.y;
+inp[120]=this.y;inp[130]=mD<2.5?1:0;
+let dop=this.y>2?this.y*.1:0,oxy=0;
+if(mD<this.lastDist-.1)oxy+=1.5;if(mD<2.5)oxy+=3;this.lastDist=mD;
+if(this.y>5&&mate.y>5&&mDist<this.lastMateDist-.1)oxy+=2.0;this.lastMateDist=mDist;
+let mot=this.brain.step(dop+oxy);
+let tVx=Math.max(-1,Math.min(1,mot.x-.5));
+let tm=this.climbing?.20:.05;
+let tVA=Math.max(-1,Math.min(1,mot.l-.5))*tm;
+let cCmd=Math.max(0,Math.min(1,mot.c*.5));
+this.vx=this.vx*.9+tVx*.1;this.vA=this.vA*.9+tVA*.1;this.angle+=this.vA;
+let nX=this.x+(this.vx*Math.cos(this.angle)),nZ=this.z+(this.vx*Math.sin(this.angle));
+let col=false,hT=null;
+for(let t of trees){let dx=t.x-nX,dz=t.z-nZ;if(dx*dx+dz*dz<(t.r+1)*(t.r+1)){col=true;hT=t;break;}}
+if(!col){this.x=nX;this.z=nZ;this.climbing=false;}
+else{
+this.climbing=true;let a=Math.atan2(hT.z-this.z,hT.x-this.x);
+if(this.y>=hT.h-.5){
+if(mot.x>.6){this.x+=Math.cos(this.angle)*4;this.z+=Math.sin(this.angle)*4;this.climbing=false;}
+else{this.x=hT.x-Math.cos(a)*(hT.r+1);this.z=hT.z-Math.sin(a)*(hT.r+1);this.vA=this.vA*.9;this.vx=0;this.y=hT.h;}
+}else{
+this.x=hT.x-Math.cos(a)*(hT.r+1);this.z=hT.z-Math.sin(a)*(hT.r+1);
+this.vA=0;this.vx=0;this.y+=Math.max(.1,cCmd*.5);if(this.y>hT.h)this.y=hT.h;}}
+if(!this.climbing&&this.y>0){this.y-=.2;if(this.y<0)this.y=0;}
+if(oxy>0)this.tC.copy(this.cP);else if(dop>0)this.tC.copy(this.cC);else this.tC.copy(this.cB);
+this.mesh.material.color.lerp(this.tC,.1);this.mesh.position.set(this.x,this.y+1,this.z);this.mesh.rotation.y=this.angle;}}
 
-        let trees = [];
-        function addTree(x, z, height) {
-            const trunkGeo = new THREE.CylinderGeometry(1, 1, height, 8);
-            const trunkMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
-            const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-            trunk.position.set(x, height / 2, z);
-            scene.add(trunk);
+let male=new C(true),female=new C(false),babies=[],mT=0;
+function mate(){
+document.getElementById('mt').style.display='block';document.getElementById('mt').innerText='MATING...';
+for(let i=0;i<2;i++){
+let b=new C(i===0);b.mesh.scale.set(.5,.5,.5);let rt=trees[Math.floor(Math.random()*trees.length)];
+b.x=rt.x+2;b.z=rt.z;b.y=rt.h;b.climbing=true;babies.push(b);}
+let t1=trees[Math.floor(Math.random()*trees.length)],t2=trees[Math.floor(Math.random()*trees.length)];
+male.x=t1.x;male.z=t1.z;male.y=0;female.x=t2.x;female.z=t2.z;female.y=0;
+setTimeout(()=>{document.getElementById('mt').style.display='none';},3000);}
 
-            const leavesGeo = new THREE.ConeGeometry(4, 8, 8);
-            const leavesMat = new THREE.MeshLambertMaterial({ color: 0x228B22 });
-            const leaves = new THREE.Mesh(leavesGeo, leavesMat);
-            leaves.position.set(x, height + 2, z);
-            scene.add(leaves);
-            trees.push({ x: x, z: z, height: height });
-        }
+function sim(){
+if(mT>0){mT--;if(mT===0)mate();return;}
+male.update(female);female.update(male);
+let dx=male.x-female.x,dz=male.z-female.z,dSq=dx*dx+dz*dz;
+if(male.y>5&&female.y>5&&dSq<16){male.brain.step(10);female.brain.step(10);mT=120;
+document.getElementById('mt').style.display='block';document.getElementById('mt').innerText='MATING...';}
+babies.forEach(b=>b.update(male));
+document.getElementById('s1').innerText='Male: Y='+male.y.toFixed(1)+' | Climb='+male.climbing;
+document.getElementById('s2').innerText='Female: Y='+female.y.toFixed(1)+' | Climb='+female.climbing;}
 
-        for (let i = 0; i < 30; i++) {
-            addTree((Math.random() - 0.5) * 150, (Math.random() - 0.5) * 150, Math.random() * 10 + 5);
-        }
+let camYaw=0,isDrag=false,lastX=0;
+ren.domElement.addEventListener('touchstart',e=>{isDrag=true;lastX=e.touches[0].clientX;});
+ren.domElement.addEventListener('touchmove',e=>{if(isDrag){camYaw-=(e.touches[0].clientX-lastX)*.01;lastX=e.touches[0].clientX;}});
+ren.domElement.addEventListener('touchend',()=>{isDrag=false;});
 
-        let state = { creature: {x:0, y:0, z:0, angle:0}, brain_drive: 0 };
-
-        async function update() {
-            const response = await fetch('/api/step', { method: 'POST', body: '{}' });
-            state = await response.json();
-
-            // Update Creature Position
-            creature.position.x = state.creature.x;
-            creature.position.y = state.creature.y + 1;
-            creature.position.z = state.creature.z;
-            creature.rotation.y = state.creature.angle;
-
-            // 3rd Person Camera (Attached behind and above)
-            const camDistance = 20;
-            const camHeight = 10;
-            
-            // Calculate offset based on creature's facing angle
-            camera.position.x = creature.position.x - Math.sin(creature.rotation.y) * camDistance;
-            camera.position.z = creature.position.z - Math.cos(creature.rotation.y) * camDistance;
-            camera.position.y = creature.position.y + camHeight;
-            
-            camera.lookAt(creature.position);
-
-            document.getElementById('status').innerText = `Status: Y=${state.creature.y.toFixed(1)} | Drive: ${state.brain_drive.toFixed(2)}`;
-            requestAnimationFrame(update);
-        }
-        update();
-    </script>
+function render(){
+const d=35,h=20;
+cam.position.x=male.mesh.position.x-Math.sin(camYaw)*d;cam.position.z=male.mesh.position.z-Math.cos(camYaw)*d;cam.position.y=male.mesh.position.y+h;
+cam.lookAt(male.mesh.position);ren.render(scene,cam);}
+function loop(){sim();render();requestAnimationFrame(loop);}loop();
+</script>
 </body>
 </html>
