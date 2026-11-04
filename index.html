@@ -4,17 +4,95 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <style>
         body { margin: 0; overflow: hidden; background: #87CEEB; font-family: monospace; }
-        #ui { position: absolute; top: 10px; left: 10px; color: #fff; background: rgba(0,0,0,0.6); padding: 10px; border-radius: 5px; z-index: 100; pointer-events: none; }
+        canvas { display: block; position: absolute; top: 0; left: 0; z-index: 0; }
+        #ui { position: absolute; top: 10px; left: 10px; color: #fff; background: rgba(0,0,0,0.7); padding: 10px; border-radius: 5px; z-index: 100; pointer-events: none; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
     <div id="ui">
-        <div>Neurons: 10,500</div>
+        <div>Neurons: 10,500 (JS Engine)</div>
         <div>Urge: Climb High</div>
         <div id="status">Status: Waking up...</div>
     </div>
     <script>
+        // ==========================================
+        // 1. THE 10,500-NEURON JS BRAIN
+        // ==========================================
+        class MegaBrain {
+            constructor() {
+                this.numNeurons = 10500;
+                this.numInputs = 130;
+                this.numOutputs = 10;
+                
+                // Membrane potential
+                this.V = new Float32Array(this.numNeurons);
+                
+                // Sparse Connections (Simulating the .npz file)
+                this.connections = [];
+                const density = 0.01;
+                const totalConnections = Math.floor(this.numNeurons * this.numNeurons * density);
+                
+                // Generate random sparse weights
+                for (let i = 0; i < totalConnections; i++) {
+                    this.connections.push({
+                        from: Math.floor(Math.random() * this.numNeurons),
+                        to: Math.floor(Math.random() * this.numNeurons),
+                        weight: (Math.random() * 2 - 1) * 0.1
+                    });
+                }
+                this.learningRate = 0.05;
+            }
+
+            step(inputs, dopamine) {
+                // Inject sensory inputs
+                for (let i = 0; i < this.numInputs; i++) {
+                    this.V[i] = inputs[i];
+                }
+
+                // Recurrent dynamics (V = V * decay + W * V)
+                let newV = new Float32Array(this.numNeurons);
+                for (let i = 0; i < this.numNeurons; i++) {
+                    newV[i] = this.V[i] * 0.95;
+                }
+
+                for (let c of this.connections) {
+                    newV[c.to] += this.V[c.from] * c.weight;
+                }
+
+                // ReLU activation
+                for (let i = 0; i < this.numNeurons; i++) {
+                    this.V[i] = Math.max(0, newV[i]);
+                }
+
+                // Dopamine-gated Hebbian learning
+                if (dopamine > 0.01) {
+                    for (let c of this.connections) {
+                        if (this.V[c.from] > 1.0 && this.V[c.to] > 1.0) {
+                            c.weight += this.learningRate * dopamine;
+                        }
+                    }
+                }
+
+                // Homeostasis (weight decay)
+                for (let c of this.connections) {
+                    c.weight *= 0.9999;
+                }
+
+                // Return motor outputs
+                let out = [];
+                for (let i = this.numNeurons - this.numOutputs; i < this.numNeurons; i++) {
+                    out.push(this.V[i]);
+                }
+                return out;
+            }
+        }
+
+        const brain = new MegaBrain();
+
+        // ==========================================
+        // 2. THE 3D WORLD
+        // ==========================================
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x87CEEB);
         scene.fog = new THREE.Fog(0x87CEEB, 50, 200);
@@ -29,7 +107,6 @@
         scene.add(light);
         scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
-        // Solid Ground Plane
         const groundGeo = new THREE.PlaneGeometry(500, 500);
         const groundMat = new THREE.MeshLambertMaterial({ color: 0x556B2F });
         const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -37,17 +114,15 @@
         ground.position.y = -0.1;
         scene.add(ground);
 
-        // Grid
         const grid = new THREE.GridHelper(200, 100, 0x000000, 0x222222);
         scene.add(grid);
 
-        // Creature
         const creatureGeo = new THREE.BoxGeometry(2, 2, 2);
         const creatureMat = new THREE.MeshLambertMaterial({ color: 0x00FF00 });
         const creature = new THREE.Mesh(creatureGeo, creatureMat);
         scene.add(creature);
 
-        // Trees
+        let trees = [];
         function addTree(x, z, height) {
             const trunkGeo = new THREE.CylinderGeometry(1, 1, height, 8);
             const trunkMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
@@ -60,42 +135,126 @@
             const leaves = new THREE.Mesh(leavesGeo, leavesMat);
             leaves.position.set(x, height + 2, z);
             scene.add(leaves);
+            trees.push({ x: x, z: z, height: height });
         }
 
         for (let i = 0; i < 30; i++) {
             addTree((Math.random() - 0.5) * 150, (Math.random() - 0.5) * 150, Math.random() * 10 + 5);
         }
 
-        let state = { creature: {x:0, y:0, z:0, angle:0}, brain_drive: 10.0 };
+        // ==========================================
+        // 3. PHYSICS & LOOP
+        // ==========================================
+        let c = { x: 0, y: 0, z: 0, angle: 0, climbing: false };
+        let zoomLevel = 1.0;
 
-        async function update() {
-            try {
-                const response = await fetch('/api/step', { method: 'POST', body: '{}' });
-                state = await response.json();
-
-                creature.position.x = state.creature.x;
-                creature.position.y = state.creature.y + 1;
-                creature.position.z = state.creature.z;
-                creature.rotation.y = state.creature.angle;
-
-                const camDistance = 25;
-                const camHeight = 15;
-                camera.position.x = creature.position.x - Math.sin(creature.rotation.y) * camDistance;
-                camera.position.z = creature.position.z - Math.cos(creature.rotation.y) * camDistance;
-                camera.position.y = creature.position.y + camHeight;
-                
-                camera.lookAt(creature.position);
-
-                document.getElementById('status').innerText = `Status: Y=${state.creature.y.toFixed(1)} | Drive: ${state.brain_drive.toFixed(2)}`;
-            } catch (e) {
-                console.error("Waiting for server...");
+        function simulate() {
+            // Find nearest tree
+            let nearestTree = null;
+            let minDist = 999;
+            for (let t of trees) {
+                let dist = Math.sqrt((t.x - c.x)**2 + (t.z - c.z)**2);
+                if (dist < minDist) { minDist = dist; nearestTree = t; }
             }
-            
-            // THE MISSING LINE THAT FIXES EVERYTHING:
-            renderer.render(scene, camera);
-            
-            requestAnimationFrame(update);
+
+            // 1. Sensory Inputs
+            let inputs = new Float32Array(130);
+            if (nearestTree) {
+                let dx = nearestTree.x - c.x;
+                let dz = nearestTree.z - c.z;
+                let angle = Math.atan2(dz, dx);
+                inputs[0] = 1.0 / (minDist + 1); // Proximity
+                inputs[1] = Math.sin(angle);
+                inputs[2] = Math.cos(angle);
+            }
+            if (c.y < 0) inputs[100] = 1.0; // Pain
+            let drive = Math.max(0, 10 - c.y);
+            inputs[110] = drive; // Urge to climb
+            inputs[120] = c.y;   // Proprioception
+
+            // 2. Dopamine (Reward for being high up)
+            let dopamine = c.y > 2.0 ? c.y * 0.1 : 0.0;
+
+            // 3. Brain Step
+            let motorOut = brain.step(inputs, dopamine);
+
+            // 4. Physics
+            let moveX = Math.max(-1, Math.min(1, motorOut[0] * 0.5));
+            let moveZ = Math.max(-1, Math.min(1, motorOut[1] * 0.5));
+            let climbCmd = Math.max(0, Math.min(1, motorOut[2]));
+            let lookCmd = Math.max(-0.1, Math.min(0.1, motorOut[3] * 0.05));
+
+            c.angle += lookCmd;
+            c.x += moveX * Math.cos(c.angle) - moveZ * Math.sin(c.angle);
+            c.z += moveX * Math.sin(c.angle) + moveZ * Math.cos(c.angle);
+
+            if (nearestTree && minDist < 2.5) {
+                c.climbing = true;
+                c.y += climbCmd * 0.5;
+                if (c.y > nearestTree.height) c.y = nearestTree.height;
+            } else {
+                c.climbing = false;
+            }
+
+            if (!c.climbing) {
+                c.y -= 0.2;
+                if (c.y < 0) c.y = 0;
+            }
+
+            // Update UI
+            document.getElementById('status').innerText = `Status: Y=${c.y.toFixed(1)} | Drive: ${drive.toFixed(2)}`;
         }
+
+        function render() {
+            // Update creature position
+            creature.position.x = c.x;
+            creature.position.y = c.y + 1;
+            creature.position.z = c.z;
+            creature.rotation.y = c.angle;
+
+            // 3rd Person Camera
+            const camDistance = 25 / zoomLevel;
+            const camHeight = 15 / zoomLevel;
+            
+            camera.position.x = creature.position.x - Math.sin(c.angle) * camDistance;
+            camera.position.z = creature.position.z - Math.cos(c.angle) * camDistance;
+            camera.position.y = creature.position.y + camHeight;
+            
+            camera.lookAt(creature.position);
+
+            renderer.render(scene, camera);
+        }
+
+        // Main Loop (Brain runs at 60fps)
+        function loop() {
+            simulate();
+            render();
+            requestAnimationFrame(loop);
+        }
+
+        // Pinch to Zoom for Android
+        let lastPinchDist = 0;
+        renderer.domElement.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 2) {
+                let dx = e.touches[0].clientX - e.touches[1].clientX;
+                let dy = e.touches[0].clientY - e.touches[1].clientY;
+                lastPinchDist = Math.sqrt(dx*dx + dy*dy);
+            }
+        });
+
+        renderer.domElement.addEventListener('touchmove', (e) => {
+            if (e.touches.length === 2) {
+                e.preventDefault();
+                let dx = e.touches[0].clientX - e.touches[1].clientX;
+                let dy = e.touches[0].clientY - e.touches[1].clientY;
+                let dist = Math.sqrt(dx*dx + dy*dy);
+                if (lastPinchDist > 0) {
+                    zoomLevel *= (dist / lastPinchDist);
+                    zoomLevel = Math.max(0.3, Math.min(zoomLevel, 3.0));
+                }
+                lastPinchDist = dist;
+            }
+        }, { passive: false });
 
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
@@ -103,7 +262,7 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        update();
+        loop();
     </script>
 </body>
 </html>
