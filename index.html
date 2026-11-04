@@ -31,8 +31,8 @@
                     motor:   { start: 10450, end: 10500 }
                 };
                 this.V = new Float32Array(this.numNeurons);
-                this.learningRate = 0.001;
-                this.decayRate = 0.999;
+                this.learningRate = 0.002; 
+                this.decayRate = 0.99; // FASTER DECAY: Kills useless spinning connections
                 this.buildModularConnections();
             }
 
@@ -133,9 +133,6 @@
 
         const brain = new ModularBrain();
 
-        // ==========================================
-        // 2. THE 3D WORLD
-        // ==========================================
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x87CEEB);
         scene.fog = new THREE.Fog(0x87CEEB, 50, 200);
@@ -158,12 +155,10 @@
         scene.add(ground);
 
         const creatureGeo = new THREE.BoxGeometry(2, 2, 2);
-        // Use a base material that we can smoothly lerp colors on
         const creatureMat = new THREE.MeshLambertMaterial({ color: 0x00FF00 });
         const creature = new THREE.Mesh(creatureGeo, creatureMat);
         scene.add(creature);
 
-        // Color targets for smooth transitions
         const colorGreen = new THREE.Color(0x00FF00);
         const colorPink = new THREE.Color(0xFF69B4);
         const colorCyan = new THREE.Color(0x00FFFF);
@@ -189,9 +184,6 @@
             addTree((Math.random() - 0.5) * 150, (Math.random() - 0.5) * 150, Math.random() * 10 + 5);
         }
 
-        // ==========================================
-        // 3. PHYSICS & REWARD LOOP
-        // ==========================================
         let c = { x: 0, y: 0, z: 0, angle: 0, climbing: false, vx: 0, vz: 0, vAngle: 0 };
         let lastDistToTree = 999.0;
 
@@ -205,16 +197,15 @@
 
             let inputs = new Float32Array(140);
             
-            // FIX: Vision Inputs are now RELATIVE to the creature's angle
             if (nearestTree) {
                 let dx = nearestTree.x - c.x;
                 let dz = nearestTree.z - c.z;
                 let absoluteAngle = Math.atan2(dz, dx);
                 let relativeAngle = absoluteAngle - c.angle; 
                 
-                inputs[0] = 1.0 / (minDist + 1); // Distance
-                inputs[1] = Math.sin(relativeAngle); // Left/Right relative
-                inputs[2] = Math.cos(relativeAngle); // Front/Back relative
+                inputs[0] = 1.0 / (minDist + 1); 
+                inputs[1] = Math.sin(relativeAngle); 
+                inputs[2] = Math.cos(relativeAngle); 
             }
             
             if (c.y < 0) inputs[100] = 1.0;
@@ -222,7 +213,6 @@
             let touching_tree = minDist < 2.5;
             inputs[130] = touching_tree ? 1.0 : 0.0;
 
-            // Reward Logic
             let dopamine = c.y > 2.0 ? c.y * 0.1 : 0.0;
             let oxytocin = 0.0;
 
@@ -231,33 +221,31 @@
             lastDistToTree = minDist;
 
             let total_reward = dopamine + oxytocin;
-
             let motorOut = brain.step(inputs, total_reward);
 
-            // FIX: Smooth Motor Physics (Momentum)
-            // Use tanh to smoothly squash the brain signals between -1 and 1
-            let targetVx = Math.tanh(motorOut.moveX - 1.0); 
-            let targetVz = Math.tanh(motorOut.moveZ - 1.0);
-            let targetVAngle = Math.tanh(motorOut.look - 1.0) * 0.05; 
+            // PHYSICS FIX: Lower turn sensitivity, stronger forward momentum
+            let targetVx = Math.tanh(motorOut.moveX - 0.8); 
+            let targetVz = Math.tanh(motorOut.moveZ - 0.8);
+            let targetVAngle = Math.tanh(motorOut.look - 1.0) * 0.015; // MUCH SLOWER TURNING
             let climbCmd = Math.max(0, Math.min(1, motorOut.climb * 0.5));
 
-            // Apply momentum (smoothing) so it doesn't snap and spin
-            c.vx = c.vx * 0.85 + targetVx * 0.15;
-            c.vz = c.vz * 0.85 + targetVz * 0.15;
-            c.vAngle = c.vAngle * 0.85 + targetVAngle * 0.15;
+            c.vx = c.vx * 0.9 + targetVx * 0.1;
+            c.vz = c.vz * 0.9 + targetVz * 0.1;
+            c.vAngle = c.vAngle * 0.9 + targetVAngle * 0.1;
 
             c.angle += c.vAngle;
             
             let nextX = c.x + (c.vx * Math.cos(c.angle) - c.vz * Math.sin(c.angle));
             let nextZ = c.z + (c.vx * Math.sin(c.angle) + c.vz * Math.cos(c.angle));
 
-            // Collision
+            // GRIP LOGIC
             let collided = false;
+            let hitTree = null;
             for (let t of trees) {
                 let distToTree = Math.sqrt((t.x - nextX)**2 + (t.z - nextZ)**2);
                 if (distToTree < t.radius + 1.0) {
                     collided = true;
-                    c.climbing = true;
+                    hitTree = t;
                     break;
                 }
             }
@@ -266,13 +254,23 @@
                 c.x = nextX;
                 c.z = nextZ;
                 c.climbing = false;
+            } else {
+                // If touching a tree, STOP SPINNING and lock onto it
+                c.angle = Math.atan2(hitTree.z - c.z, hitTree.x - c.x);
+                c.vAngle = 0;
+                c.vx = 0;
+                c.vz = 0;
+                c.climbing = true;
+                
+                // Climb up
+                c.y += climbCmd * 0.5;
+                if (c.y > hitTree.height) {
+                    c.y = hitTree.height; // Stay at the top
+                }
             }
 
-            if (c.climbing) {
-                c.y += climbCmd * 0.5;
-                if (nearestTree && c.y > nearestTree.height) c.y = nearestTree.height;
-            } else {
-                c.y -= 0.2;
+            if (!c.climbing && c.y > 0) {
+                c.y -= 0.2; // Gravity
                 if (c.y < 0) c.y = 0;
             }
 
@@ -280,7 +278,6 @@
                 c.x = 0; c.z = 0; c.y = 0; c.vx = 0; c.vz = 0;
             }
 
-            // FIX: Smooth Color Transitions
             if (oxytocin > 0) targetColor.copy(colorPink);
             else if (dopamine > 0) targetColor.copy(colorCyan);
             else targetColor.copy(colorGreen);
