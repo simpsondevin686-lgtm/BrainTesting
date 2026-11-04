@@ -5,13 +5,13 @@
 <style>
 body{margin:0;overflow:hidden;background:#87CEEB;font-family:monospace}
 canvas{display:block;position:absolute;top:0;left:0;z-index:0}
-#ui{position:absolute;top:10px;left:10px;color:#fff;background:rgba(0,0,0,.8);padding:10px;border-radius:5px;z-index:100;pointer-events:none}
+#ui{position:absolute;top:10px;left:10px;color:#fff;background:rgba(0,0,0,.8);padding:10px;border-radius:5px;z-index:100;pointer-events:none;font-size:12px}
 .m{color:#FF0;font-weight:700;font-size:20px;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:200;text-shadow:2px 2px 4px #000}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
-<div id="ui"><div id="pop">Brains: Loading...</div><div id="s1">Male...</div><div id="s2">Female...</div></div>
+<div id="ui"><div id="pop">Brains: 2</div><div id="s1">Youngest: 0s</div><div id="s2">Pop Size: 2</div></div>
 <div id="mt" class="m" style="display:none">MATING</div>
 <script>
 class B{
@@ -66,7 +66,7 @@ for(let i=0;i<30;i++)addT((Math.random()-.5)*150,(Math.random()-.5)*150,Math.ran
 
 class C{
 constructor(isM,gen){
-this.isM=isM;this.gen=gen;
+this.isM=isM;this.gen=gen;this.age=0;this.isMature=false;this.cool=0;
 let bSize=gen===0?15000:(gen===1?3000:1000);
 this.brain=new B(bSize);
 this.x=(Math.random()-.5)*100;this.z=(Math.random()-.5)*100;this.y=0;this.angle=0;this.vx=0;this.vA=0;this.climbing=false;this.lastDist=999;this.lastMateDist=999;
@@ -75,6 +75,10 @@ const geo=new THREE.BoxGeometry(s,s,s),mat=new THREE.MeshLambertMaterial({color:
 this.mesh=new THREE.Mesh(geo,mat);scene.add(this.mesh);
 this.cB=new THREE.Color(isM?0x00FF00:0xFF00FF);this.cP=new THREE.Color(0xFF69B4);this.cC=new THREE.Color(0x00FFFF);this.tC=new THREE.Color().copy(this.cB);}
 update(mate){
+this.age+=1/60;
+if(this.age>600&&!this.isMature){this.isMature=true;this.mesh.material.emissive=new THREE.Color(0x333333);}
+let sc=Math.max(0.2,Math.min(1,this.age/600));this.mesh.scale.set(sc,sc,sc);
+if(this.cool>0)this.cool-=1/60;
 let nT=null,mD=999,mDSq=999999;
 for(let t of trees){let dx=t.x-this.x,dz=t.z-this.z,dSq=dx*dx+dz*dz;if(dSq<mDSq){mDSq=dSq;nT=t;mD=Math.sqrt(dSq);}}
 this.brain.in.fill(0);let inp=this.brain.in;
@@ -85,7 +89,6 @@ inp[120]=this.y;inp[130]=mD<2.5?1:0;
 let dop=this.y>2?this.y*.1:0,oxy=0;
 if(mD<this.lastDist-.1)oxy+=1.5;if(mD<2.5)oxy+=3;this.lastDist=mD;
 if(this.y>5&&mate.y>5&&mDist<this.lastMateDist-.1)oxy+=2.0;this.lastMateDist=mDist;
-// CUDDLE REWARD: Massive reward for being on the same tree
 if(this.climbing&&mate.climbing&&mDist<5.0)oxy+=5.0;
 let mot=this.brain.step(dop+oxy);
 let tVx=Math.max(-1,Math.min(1,mot.x-.5));
@@ -109,30 +112,37 @@ if(!this.climbing&&this.y>0){this.y-=.2;if(this.y<0)this.y=0;}
 if(oxy>0)this.tC.copy(this.cP);else if(dop>0)this.tC.copy(this.cC);else this.tC.copy(this.cB);
 this.mesh.material.color.lerp(this.tC,.1);this.mesh.position.set(this.x,this.y+1,this.z);this.mesh.rotation.y=this.angle;}}
 
-let male=new C(true,0),female=new C(false,0),babies=[],mT=0;
-function mate(){
+let pop=[new C(true,0),new C(false,0)];
+let mT=0;
+function mate(a,b){
 document.getElementById('mt').style.display='block';document.getElementById('mt').innerText='MATING...';
+a.cool=120;b.cool=120;
 for(let i=0;i<2;i++){
-let b=new C(i===0,1);let rt=trees[Math.floor(Math.random()*trees.length)];
-b.x=rt.x+2;b.z=rt.z;b.y=rt.h;b.climbing=true;babies.push(b);}
+let baby=new C(i===0,1);let rt=trees[Math.floor(Math.random()*trees.length)];
+baby.x=rt.x+2;baby.z=rt.z;baby.y=rt.h;baby.climbing=true;pop.push(baby);}
 let t1=trees[Math.floor(Math.random()*trees.length)],t2=trees[Math.floor(Math.random()*trees.length)];
-male.x=t1.x;male.z=t1.z;male.y=0;female.x=t2.x;female.z=t2.z;female.y=0;
+a.x=t1.x;a.z=t1.z;a.y=0;b.x=t2.x;b.z=t2.z;b.y=0;
 setTimeout(()=>{document.getElementById('mt').style.display='none';},3000);}
 
 function sim(){
-if(mT>0){mT--;if(mT===0)mate();return;}
-male.update(female);female.update(male);
-let dx=male.x-female.x,dz=male.z-female.z,dSq=dx*dx+dz*dz;
-if(male.y>5&&female.y>5&&dSq<16){male.brain.step(10);female.brain.step(10);mT=120;
-document.getElementById('mt').style.display='block';document.getElementById('mt').innerText='MATING...';}
-babies.forEach((b,i)=>{
-if(b.climbing&&male.climbing){let dx2=b.x-male.x,dz2=b.z-male.z;if(dx2*dx2+dz2*dz2<25)b.brain.step(10);}
-b.update(i%2===0?male:female);
-if(b.y>5&&i%2===0){b.update(female);}
-});
-document.getElementById('pop').innerText='Brains: 2x15k, '+babies.length+'x3k';
-document.getElementById('s1').innerText='Male: Y='+male.y.toFixed(1)+' | C='+male.climbing;
-document.getElementById('s2').innerText='Female: Y='+female.y.toFixed(1)+' | C='+female.climbing;}
+if(mT>0){mT--;return;}
+for(let i=0;i<pop.length;i++){
+let mateTarget=pop[(i+1)%pop.length];
+pop[i].update(mateTarget);
+}
+for(let i=0;i<pop.length;i++){
+for(let j=i+1;j<pop.length;j++){
+let a=pop[i],b=pop[j];
+if(a.isMature&&b.isMature&&a.isM!==b.isM&&a.cool<=0&&b.cool<=0){
+let dx=a.x-b.x,dz=a.z-b.z,dSq=dx*dx+dz*dz;
+if(a.y>5&&b.y>5&&dSq<16){mate(a,b);}
+}
+}
+}
+document.getElementById('pop').innerText='Pop: '+pop.length+' (Brains: '+(pop.length*3000)+'n)';
+document.getElementById('s1').innerText='Youngest: '+Math.max(0,(pop[pop.length-1].age)).toFixed(0)+'s';
+document.getElementById('s2').innerText='Adults: '+pop.filter(p=>p.isMature).length;
+}
 
 let camYaw=0,isDrag=false,lastX=0;
 ren.domElement.addEventListener('touchstart',e=>{isDrag=true;lastX=e.touches[0].clientX;});
@@ -140,9 +150,9 @@ ren.domElement.addEventListener('touchmove',e=>{if(isDrag){camYaw-=(e.touches[0]
 ren.domElement.addEventListener('touchend',()=>{isDrag=false;});
 
 function render(){
-const d=35,h=20;
-cam.position.x=male.mesh.position.x-Math.sin(camYaw)*d;cam.position.z=male.mesh.position.z-Math.cos(camYaw)*d;cam.position.y=male.mesh.position.y+h;
-cam.lookAt(male.mesh.position);ren.render(scene,cam);}
+const d=35,h=20;let target=pop[0];
+cam.position.x=target.mesh.position.x-Math.sin(camYaw)*d;cam.position.z=target.mesh.position.z-Math.cos(camYaw)*d;cam.position.y=target.mesh.position.y+h;
+cam.lookAt(target.mesh.position);ren.render(scene,cam);}
 function loop(){sim();render();requestAnimationFrame(loop);}loop();
 </script>
 </body>
